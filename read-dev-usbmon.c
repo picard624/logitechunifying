@@ -20,6 +20,11 @@
  */
 
 #include <fcntl.h>
+#ifdef WITH_PCAP
+#   include <pcap/pcap.h>
+#   include <sys/types.h>
+#   include <sys/stat.h>
+#endif
 #include <unistd.h>
 #include <stdio.h>
 #include <sys/ioctl.h>
@@ -92,21 +97,52 @@ void print_time(const struct timeval *tval) {
 void process_usbpkt(const struct usbmon_packet *hdr, const unsigned char *data,
 	const struct timeval *tval);
 
-int main(int argc, char ** argv) {
+#ifdef WITH_PCAP
+static void packet_callback(u_char *user, const struct pcap_pkthdr *h,
+		const u_char *bytes) {
+	const struct usbmon_packet *hdr;
+	const unsigned char *data;
+	(void) user;
+
+	if (h->caplen < sizeof(struct usbmon_packet)) {
+		return;
+	}
+
+	hdr = (struct usbmon_packet *) bytes;
+	data = bytes + sizeof(*hdr);
+	process_usbpkt(hdr, data, &h->ts);
+}
+
+int main_pcap(char *filename) {
+	pcap_t *p;
+	char errbuf[PCAP_ERRBUF_SIZE];
+	int r;
+
+	p = pcap_open_offline(filename, errbuf);
+	if (p == NULL) {
+		fprintf(stderr, "%s\n", errbuf);
+		return 1;
+	}
+
+	r = pcap_loop(p, -1, packet_callback, NULL);
+	if (r == -1) {
+		pcap_perror(p, filename);
+	}
+	pcap_close(p);
+	return 0;
+}
+#endif
+
+int main_usbmon(char *filename) {
 	unsigned char data[1024];
 	struct usbmon_packet hdr;
 	struct mon_get_arg event;
 	int fd, r;
 	struct timeval tval = { 0, 0 };
 
-	if (argc < 2) {
-		fprintf(stderr, "Usage: %s /dev/usbmonX\n", argv[0]);
-		return 1;
-	}
-
-	fd = open(argv[1], O_RDONLY);
+	fd = open(filename, O_RDONLY);
 	if (fd < 0) {
-		perror(argv[1]);
+		perror(filename);
 		return 1;
 	}
 
@@ -137,6 +173,25 @@ int main(int argc, char ** argv) {
 	close(fd);
 
 	return 0;
+}
+
+int main(int argc, char **argv) {
+	char *filename;
+	if (argc < 2) {
+		fprintf(stderr, "Usage: %s </dev/usbmonX | - | foo.pcap>\n",
+			argv[0]);
+		return 1;
+	}
+	filename = argv[1];
+#ifdef WITH_PCAP
+	struct stat sbuf;
+	/* assume that usbmon files are devices, and pcap are files.
+	 * "-" does not exist, so assume pcap if file cannot be stat()ed. */
+	if (stat(filename, &sbuf) != 0 || !S_ISCHR(sbuf.st_mode)) {
+		return main_pcap(filename);
+	}
+#endif
+	return main_usbmon(filename);
 }
 
 void process_usbpkt(const struct usbmon_packet *hdr, const unsigned char *data,

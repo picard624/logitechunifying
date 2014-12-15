@@ -9,6 +9,9 @@ udevrulesdir ?= /etc/udev/rules.d
 
 udevrule = 42-logitech-unify-permissions.rules
 
+# Whether to support reading pcap files in read-dev-usbmon
+WITH_PCAP ?= 1
+
 PACKAGE_VERSION ?= $(shell git describe --dirty 2>/dev/null | sed s/^v//)
 ifeq (PACKAGE_VERSION, "")
 	LTUNIFY_DEFINES :=
@@ -22,6 +25,9 @@ endif
 all: ltunify read-dev-usbmon
 
 read-dev-usbmon: read-dev-usbmon.c hidraw.c
+ifeq ($(WITH_PCAP), 1)
+	$(CC) $(CFLAGS) -o $(OUTDIR)$@ $< -lpcap -DWITH_PCAP=1
+endif
 
 ltunify: ltunify.c hidpp20.c
 	$(CC) $(CFLAGS) -o $(OUTDIR)$@ $< -lrt $(LTUNIFY_DEFINES)

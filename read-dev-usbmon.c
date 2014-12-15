@@ -3,7 +3,7 @@
  * Because of limitations of a single output stream, there is currently a hack
  * that directly includes hidraw.c.
  *
- * Copyright (C) 2013 Peter Wu <lekensteyn@gmail.com>
+ * Copyright (C) 2013-2014 Peter Wu <peter@lekensteyn.nl>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -80,25 +80,24 @@ struct mon_get_arg {
 #include "hidraw.c"
 #undef NO_MAIN
 
-void print_time(void) {
-	struct timeval tval;
+void print_time(const struct timeval *tval) {
 	struct tm *tm;
 
-	if (gettimeofday(&tval, NULL)) {
-		perror("gettimeofday");
-		return;
-	}
-	tm = localtime(&tval.tv_sec);
+	tm = localtime(&tval->tv_sec);
 	printf("%02d:%02d:%02d.%03ld ",
 		tm->tm_hour, tm->tm_min, tm->tm_sec,
-		tval.tv_usec / 1000);
+		tval->tv_usec / 1000);
 }
+
+void process_usbpkt(const struct usbmon_packet *hdr, const unsigned char *data,
+	const struct timeval *tval);
 
 int main(int argc, char ** argv) {
 	unsigned char data[1024];
 	struct usbmon_packet hdr;
 	struct mon_get_arg event;
 	int fd, r;
+	struct timeval tval = { 0, 0 };
 
 	if (argc < 2) {
 		fprintf(stderr, "Usage: %s /dev/usbmonX\n", argv[0]);
@@ -129,45 +128,54 @@ int main(int argc, char ** argv) {
 			break;
 		}
 
-		// ignore non-data packets
-		if (hdr.len_cap) {
-			if (getenv("HEX")) {
-				unsigned int i;
-				printf("Type=%c\n", hdr.type);
-				for (i=0; i<hdr.len_cap; i++) {
-					printf("%02X%c", data[i],
-						i + 1 == hdr.len_cap ? '\n' : ' ');
-				}
-			} else if (hdr.len_cap > sizeof (struct report)) {
-				fprintf(stderr, "Discarding too large packet of length %u!\n", hdr.len_cap);
-			} else {
-				struct report *report = (struct report *)&data;
-				if (hdr.len_cap < 3) {
-					fprintf(stderr, "Short data len: %i\n", hdr.len_cap);
-					continue;
-				}
-#define COLOR(c, cstr) "\033[" c "m" cstr "\033[m"
-				print_time();
-				if (hdr.type == 'C') {
-					printf(COLOR("1;32", "Recv\t"));
-				} else if (hdr.type == 'S') {
-					printf(COLOR("1;31", "Send\t"));
-				} else {
-					printf(COLOR("1;35", "Type=%c\t") "\n", hdr.type);
-				}
-				process_msg(report, hdr.len_cap);
-				fflush(NULL);
-#if 0
-				if (write(STDOUT_FILENO, &data, hdr.len_cap) < 0) {
-					perror("write");
-					break;
-				}
-#endif
-			}
+		if (gettimeofday(&tval, NULL)) {
+			perror("gettimeofday");
 		}
+		process_usbpkt(&hdr, data, &tval);
 	}
 
 	close(fd);
 
 	return 0;
+}
+
+void process_usbpkt(const struct usbmon_packet *hdr, const unsigned char *data,
+	const struct timeval *tval) {
+	// ignore non-data packets
+	if (!hdr->len_cap) {
+		return;
+	}
+	if (getenv("HEX")) {
+		unsigned int i;
+		printf("Type=%c\n", hdr->type);
+		for (i=0; i<hdr->len_cap; i++) {
+			printf("%02X%c", data[i],
+				i + 1 == hdr->len_cap ? '\n' : ' ');
+		}
+	} else if (hdr->len_cap > sizeof (struct report)) {
+		fprintf(stderr, "Discarding too large packet of length %u!\n", hdr->len_cap);
+	} else {
+		struct report *report = (struct report *)data;
+		if (hdr->len_cap < 3) {
+			fprintf(stderr, "Short data len: %i\n", hdr->len_cap);
+			return;
+		}
+#define COLOR(c, cstr) "\033[" c "m" cstr "\033[m"
+		print_time(tval);
+		if (hdr->type == 'C') {
+			printf(COLOR("1;32", "Recv\t"));
+		} else if (hdr->type == 'S') {
+			printf(COLOR("1;31", "Send\t"));
+		} else {
+			printf(COLOR("1;35", "Type=%c\t") "\n", hdr->type);
+		}
+		process_msg(report, hdr->len_cap);
+		fflush(NULL);
+#if 0
+		if (write(STDOUT_FILENO, data, hdr->len_cap) < 0) {
+			perror("write");
+			break;
+		}
+#endif
+	}
 }
